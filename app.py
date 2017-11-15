@@ -18,11 +18,12 @@ requests_log = logging.getLogger("requests.packages.urllib3")
 requests_log.setLevel(logging.DEBUG)
 requests_log.propagate = True
 
-
+# Replace these with the values you get when you register you app in the SMART sandbox
 client_id = "df23ba7c-3b2b-4b92-8aec-fbe73426d472"
 client_secret = "AKBmOV4tIIs6C7y2Dgy6Idquo_NUgFYolDmOpTDOtt2Hr_Nw7RglPE2aeHzBI0cuEyJN2tDgwPLQe_A2aAqLQr8"
 redirect_uri = "http://localhost:5000/callback"
 
+# Scopes to request from the SMART server
 scope = [ \
     "openid", \
     "patient/*.*", \
@@ -36,11 +37,12 @@ app = Flask(__name__)
 def index():
     return "SMART on FHIR test client - please launch from the SMART sandbox"
 
+"""
+This is the main launch URL called by the SMART on FHIR sandbox (or any SMART on FHIR enabled EPR)
+"""
 @app.route('/smart-app')
 def launch():
-    """
-    Attempt to re-create the javascript version in python
-    """
+
     # Get some launch parameters from the calling EHR system
     serviceUri = request.args.get('iss') #  https://sb-fhir-stu3.smarthealthit.org/smartstu3/data
     launchContextId = request.args.get('launch')
@@ -64,30 +66,38 @@ def launch():
 
     print ("Got an authorization URL from the capabilitystatement:"+authorizeUrl)
     print ("Got a token URL from the capabilitystatement:"+tokenUrl)
-    
-    
+
+    # Store the relevant parameters in the session to use for authorizing
+    session['launchContextId'] = launchContextId
+    session['serviceUri'] = serviceUri
+    session['authorizeUrl'] = authorizeUrl
+    session['tokenUrl'] = tokenUrl
+
+    return authorize_user()
+
+"""
+Use the python oauth2 client to call the authorization endpoint
+"""
+def authorize_user():
     smart_auth_session = OAuth2Session(client_id)
-    authorization_url, state = smart_auth_session.authorization_url(authorizeUrl, aud=serviceUri, launch=launchContextId)
+    authorization_url, state = smart_auth_session.authorization_url(session['authorizeUrl'], \
+								    aud=session['serviceUri'], \
+								    launch=session['launchContextId'])
 
     # State is used to prevent CSRF, keep this for later.
     session['oauth_state'] = state
-    session['tokenUrl'] = tokenUrl
-    session['serviceUri'] = serviceUri
     
     print ("Redirecting to authorization URL:"+authorization_url)
-    
     return redirect(authorization_url)
 
 
+"""
+Callback URL called by authorization server once the user has logged in.
+Takes their authorization code and calls the token endpoint to get an access token.
+"""
 @app.route("/callback", methods=["GET", "POST"])
 def callback():
-    """ Retrieving an access token.
-
-    The user has been redirected back from the provider to your registered
-    callback URL. With this redirection comes an authorization code included
-    in the redirect URL. We will use that to obtain an access token.
-    """
-
+    # Retrieving an access token
     smart_auth_session = OAuth2Session(client_id, scope=scope, redirect_uri=redirect_uri, state=session['oauth_state'])
     token_url = session['tokenUrl']
     
@@ -96,11 +106,14 @@ def callback():
 
     session['oauth_token'] = token_response
     
-    # Get the patient ID passed in
+    # Get the patient ID passed in with the token
     patient_id = token_response['patient']
 
     return getPatientDetails(patient_id)
 
+"""
+Access a protected FHIR resource from the SMART server, passing our access token in the request
+"""
 def getPatientDetails(patient_id):
     protected_resource_request = OAuth2Session(client_id, token=session['oauth_token'])
     fhir_root = session['serviceUri']
@@ -121,8 +134,12 @@ def getRemoteResource(serviceUri):
     resultResource = response.readall().decode('utf-8')
     return resultResource
 
+"""
+Initialise our Flask server in debug mode
+"""
 if __name__ == '__main__':
     import os
     os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
     app.secret_key = os.urandom(24)
     app.run(host="localhost", port=5000, debug=True)
+
