@@ -9,6 +9,7 @@ from requests_oauthlib import OAuth2Session
 import json
 import logging
 import http.client
+import warnings
 
 # Enable lots of debug logging
 http.client.HTTPConnection.debuglevel = 1
@@ -35,7 +36,15 @@ app = Flask(__name__)
 
 @app.route('/')
 def index():
-    return "SMART on FHIR test client - please launch from the SMART sandbox"
+    return "SMART on FHIR test client - please either launch from the SMART sandbox, or <a href='/standalone'>click here to test a standalone launch</a>"
+
+@app.route('/standalone')
+def standalone():
+    session['serviceUri'] = "https://sb-fhir-stu3.smarthealthit.org/smartstu3/data"
+    # Go to the server and get the auth endpoint URLs from it's CapabilityStatement
+    getAuthEndpointFromServerConformance(session['serviceUri'])
+    # Now, start the authorization process against the auth endpoint
+    return authorize_user()
 
 """
 This is the main launch URL called by the SMART on FHIR sandbox (or any SMART on FHIR enabled EPR)
@@ -46,9 +55,22 @@ def launch():
     # Get some launch parameters from the calling EHR system
     serviceUri = request.args.get('iss') #  https://sb-fhir-stu3.smarthealthit.org/smartstu3/data
     launchContextId = request.args.get('launch')
+    # Store launch context in the session
+    session['launchContextId'] = launchContextId
+    session['serviceUri'] = serviceUri
     
     print ("App launched from SMART sandbox, with issuer URL: "+serviceUri)
 
+    # Go to the server and get the auth endpoint URLs from it's CapabilityStatement
+    getAuthEndpointFromServerConformance(serviceUri)
+    
+    # Now, start the authorization process against the auth endpoint
+    return authorize_user()
+
+"""
+Go to the specified FHIR server and retrieve it's CapabilityStatement to obtain the OAuth details
+"""
+def getAuthEndpointFromServerConformance(serviceUri):
     # The issuer is the server endpoint - get it's conformance profile to find the auth URL
     conformanceResource = getRemoteResource(serviceUri)
     # Parse the oauth URLs from the profile
@@ -68,21 +90,22 @@ def launch():
     print ("Got a token URL from the capabilitystatement:"+tokenUrl)
 
     # Store the relevant parameters in the session to use for authorizing
-    session['launchContextId'] = launchContextId
-    session['serviceUri'] = serviceUri
     session['authorizeUrl'] = authorizeUrl
     session['tokenUrl'] = tokenUrl
-
-    return authorize_user()
 
 """
 Use the python oauth2 client to call the authorization endpoint
 """
 def authorize_user():
     smart_auth_session = OAuth2Session(client_id)
-    authorization_url, state = smart_auth_session.authorization_url(session['authorizeUrl'], \
+    
+    if 'launchContextId' in session:
+        authorization_url, state = smart_auth_session.authorization_url(session['authorizeUrl'], \
 								    aud=session['serviceUri'], \
 								    launch=session['launchContextId'])
+    else:
+        authorization_url, state = smart_auth_session.authorization_url(session['authorizeUrl'], \
+                                    aud=session['serviceUri'])
 
     # State is used to prevent CSRF, keep this for later.
     session['oauth_state'] = state
@@ -106,10 +129,12 @@ def callback():
 
     session['oauth_token'] = token_response
     
-    # Get the patient ID passed in with the token
-    patient_id = token_response['patient']
-
-    return getPatientDetails(patient_id)
+    if 'patient' in session:
+        # Get the patient ID passed in with the token
+        patient_id = token_response['patient']    
+        return getPatientDetails(patient_id)
+    else:
+        return getPatientList()
 
 """
 Access a protected FHIR resource from the SMART server, passing our access token in the request
@@ -118,6 +143,12 @@ def getPatientDetails(patient_id):
     protected_resource_request = OAuth2Session(client_id, token=session['oauth_token'])
     fhir_root = session['serviceUri']
     patient_url = fhir_root+"/Patient/"+patient_id
+    return json.dumps(protected_resource_request.get(patient_url).json())
+
+def getPatientList():
+    protected_resource_request = OAuth2Session(client_id, token=session['oauth_token'])
+    fhir_root = session['serviceUri']
+    patient_url = fhir_root+"/Patient"
     return json.dumps(protected_resource_request.get(patient_url).json())
 
 """
@@ -140,6 +171,7 @@ Initialise our Flask server in debug mode
 if __name__ == '__main__':
     import os
     os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
+    os.environ['OAUTHLIB_RELAX_TOKEN_SCOPE'] = '1'
     app.secret_key = os.urandom(24)
     app.run(host="localhost", port=5000, debug=True)
 

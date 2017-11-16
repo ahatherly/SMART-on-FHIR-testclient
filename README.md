@@ -41,3 +41,10 @@ Make sure you update app.py with your client ID and secret (provided when you cr
 
 Now, when you click the "Launch" button in the sandbox you should be able to select a patient, have it launch your app, authorise access, and then you should see a FHIR patient resource displayed from your app, which has been retrieved from the Smart Sandbox as part of an authenticated oauth2 session.
 
+Standalone Launch
+=================
+
+The other way of launching a SMART on FHIR app is as a standalone launch. In this case the app needs to know the resource server URL so it can get the CapabilityStatement and find the auth URL. In our example, this is hard-coded to the SMART sandbox URL, so if you want to test against a different server you'll need to change the URL in app.py.
+
+To try this out, launch http://localhost:5000 and click the standalone login link.
+
